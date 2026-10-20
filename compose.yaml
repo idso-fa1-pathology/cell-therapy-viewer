@@ -1,13 +1,24 @@
+x-proxy: &proxy
+  # Set VIEWER_PROXY= in .env to disable the proxy outside this network.
+  HTTP_PROXY: ${VIEWER_PROXY-http://1mcwebproxy01.mdanderson.edu:3128}
+  HTTPS_PROXY: ${VIEWER_PROXY-http://1mcwebproxy01.mdanderson.edu:3128}
+  http_proxy: ${VIEWER_PROXY-http://1mcwebproxy01.mdanderson.edu:3128}
+  https_proxy: ${VIEWER_PROXY-http://1mcwebproxy01.mdanderson.edu:3128}
+  NO_PROXY: localhost,127.0.0.1,::1
+  no_proxy: localhost,127.0.0.1,::1
+
 services:
   viewer:
     image: ${VIEWER_IMAGE:-pathology-viewer:local}
     build:
       context: .
+      args: *proxy
     init: true
     restart: unless-stopped
     ports:
       - "${VIEWER_BIND_ADDRESS:-0.0.0.0}:${VIEWER_PORT:-8000}:8000"
     environment:
+      <<: *proxy
       VIEWER_HOST: 0.0.0.0
       VIEWER_PORT: "8000"
       DATA_DIR: /data

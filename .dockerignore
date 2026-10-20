@@ -1,0 +1,14 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!requirements.txt
+!server.py
+!prepare.py
+!index.html
+!vite.config.js
+!src/
+!src/**
+!public/
+!public/**
+!THIRD_PARTY_NOTICES.txt

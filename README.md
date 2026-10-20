@@ -56,6 +56,10 @@ The default `DATA_DIR=./data` uses the supplied case. The folder must exist. You
 docker compose up -d --build
 ```
 
+Compose passes `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` to **both build stages and the running container**, using `http://1mcwebproxy01.mdanderson.edu:3128` by default. This lets `pip install` and `npm ci` use the institutional proxy during the build. `NO_PROXY` and `no_proxy` exclude `localhost`, `127.0.0.1`, and `::1`, keeping the container health check local.
+
+To use another proxy, set `VIEWER_PROXY=http://your-proxy:port` in `.env`. Outside the institutional network, explicitly set `VIEWER_PROXY=` to disable it. Docker handles these [predefined proxy build arguments](https://docs.docker.com/build/building/variables/#proxy-arguments) without adding `ARG` or `ENV` instructions to the Dockerfile.
+
 Open **http://127.0.0.1:8000/2606J01_511_2_Liv_19/**, or use another case folder's name. The service publishes port 8000 on the host by default. Set `VIEWER_BIND_ADDRESS=127.0.0.1` in `.env` if you want it bound only to localhost.
 
 The host data root is mounted **read-only** at `/data`. Generated annotation caches live in the separate `viewer-cache` Docker volume at `/cache`, and survive container replacement. Slide files are excluded from the build context and image. Copy this project to another machine, set its data path, and run the same command.
@@ -79,6 +83,7 @@ Configuration:
 | `VIEWER_BIND_ADDRESS` | `0.0.0.0` | Host interface on which to publish the port |
 | `VIEWER_IMAGE` | `pathology-viewer:local` | Image name/tag to build and run |
 | `MAX_OPEN_CASES` | `4` | Maximum simultaneously open cases per server |
+| `VIEWER_PROXY` | `http://1mcwebproxy01.mdanderson.edu:3128` | Proxy for builds and containers; set an empty value to disable |
 
 To use the image without Compose:
 
