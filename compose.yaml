@@ -1,0 +1,26 @@
+services:
+  viewer:
+    image: ${VIEWER_IMAGE:-pathology-viewer:local}
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${VIEWER_BIND_ADDRESS:-0.0.0.0}:${VIEWER_PORT:-8000}:8000"
+    environment:
+      VIEWER_HOST: 0.0.0.0
+      VIEWER_PORT: "8000"
+      DATA_DIR: /data
+      CACHE_DIR: /cache
+      MAX_OPEN_CASES: ${MAX_OPEN_CASES:-4}
+    volumes:
+      - type: bind
+        source: ${DATA_DIR:-./data}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - viewer-cache:/cache
+
+volumes:
+  viewer-cache:

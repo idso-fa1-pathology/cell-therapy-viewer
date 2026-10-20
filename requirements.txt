@@ -1,0 +1,4 @@
+openslide-python==1.4.6
+openslide-bin==4.0.1.2
+Pillow==13.0.0
+ijson==3.6.0
