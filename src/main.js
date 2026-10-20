@@ -193,7 +193,7 @@ function loadAnnotations(metadata, dimensions) {
           pointOverlay.setVisibility(toggle.checked);
           opacity.disabled = !toggle.checked;
           element('ihc-opacity-value').textContent = `${opacity.value}%`;
-          element('annotation-legend').hidden = !toggle.checked;
+          element('annotation-legend').hidden = false;
         };
         toggle.disabled = opacity.disabled = false;
         toggle.addEventListener('change', update);
