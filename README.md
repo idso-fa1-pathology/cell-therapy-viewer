@@ -6,7 +6,7 @@ The toolbar above the IHC slide lets you click a class's color swatch to recolor
 
 ## Data folders and URLs
 
-Choose one data root, anywhere on the host machine. Put each case in its own immediate subfolder. The folder name is both the URL identifier and the prefix of its four files:
+Choose one data root, anywhere on the host machine. Put each case in its own immediate subfolder. **The folder name determines the URL only.** Files are discovered by their `_HE` / `_IHC` suffixes, so you can copy or rename a folder without renaming its contents:
 
 ```text
 /path/to/slide-data/
@@ -15,21 +15,23 @@ Choose one data root, anywhere on the host machine. Put each case in its own imm
 │   ├── 2606J01_511_2_Liv_19_HE.png
 │   ├── 2606J01_511_2_Liv_19_IHC.tiff
 │   └── 2606J01_511_2_Liv_19_IHC.geojson
-└── ANOTHER_SLIDE/
-    ├── ANOTHER_SLIDE_HE.tiff
-    ├── ANOTHER_SLIDE_HE.png
-    ├── ANOTHER_SLIDE_IHC.tiff
-    └── ANOTHER_SLIDE_IHC.geojson
+└── test_link/
+    ├── 2606J01_511_2_Liv_19_HE.tiff
+    ├── 2606J01_511_2_Liv_19_HE.png
+    ├── 2606J01_511_2_Liv_19_IHC.tiff
+    └── 2606J01_511_2_Liv_19_IHC.geojson
 ```
 
 These open at:
 
 - `http://127.0.0.1:8000/2606J01_511_2_Liv_19/`
-- `http://127.0.0.1:8000/ANOTHER_SLIDE/`
+- `http://127.0.0.1:8000/test_link/`
 
 On a remote machine, replace `127.0.0.1` with that machine's hostname or IP address. Opening `/` lists the available folders, or opens the case directly when there is only one. Direct links and browser refresh work; a missing trailing slash is added automatically.
 
-The supplied case is now in `data/2606J01_511_2_Liv_19/`. Both `.tiff` and `.tif` slide extensions are accepted. Names and the `_HE` / `_IHC` suffixes are case-sensitive. Spaces and Unicode in names are URL-encoded by the case list. Hidden folders and the reserved names `api`, `assets`, and `favicon.svg` are excluded. Each case must contain all four files; missing files produce a visible error naming the missing file.
+Each folder must contain exactly one file for each role: `*_HE.tiff` (or `.tif`), `*_IHC.tiff` (or `.tif`), `*_HE.png`, and `*_IHC.geojson`. The prefixes can be anything; they do not have to match the folder name. Suffix matching is case-insensitive. Missing or multiple matches produce a visible error instead of guessing which slide or overlay to open. Unrelated files and hidden files such as macOS `._` sidecars are ignored.
+
+The supplied case is in `data/2606J01_511_2_Liv_19/`. Spaces and Unicode in folder names are URL-encoded by the case list: a folder named `test link` opens at `/test%20link/`. Hidden folders and the reserved names `api`, `assets`, and `favicon.svg` are excluded.
 
 New folders are discovered on request, without rebuilding or restarting. Copy a complete case into the data root before opening its URL. Restart the viewer after replacing files in an existing case. Slides and overlays are opened on demand; each case has separate, versioned resource URLs and annotation caches.
 
@@ -182,9 +184,9 @@ To use an installed Google Chrome instead:
 PLAYWRIGHT_CHANNEL=chrome npm run test:browser
 ```
 
-Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, new-folder discovery, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests.
+Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, copied folders with unchanged filenames, case-insensitive suffix discovery, ambiguous matches, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests.
 
-Verification on October 20, 2026: all **21 tests passed** (3 JavaScript, 10 Python, 8 Chrome browser tests), including bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. Browser tests ran against the Compose service. Docker images built successfully for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
+Verification on October 20, 2026: all **27 tests passed** (3 JavaScript, 16 Python, 8 Chrome browser tests), including copied folders with unchanged filenames, bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. Browser tests ran against the Compose service. Docker images built successfully for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
 
 A previous exhaustive comparison verified all 298,344 source coordinates and class IDs; maximum Float32 coordinate error was 0.0009766 image pixels. Cellular-resolution inspection at approximately 115% image zoom showed points tracking individual cells.
 

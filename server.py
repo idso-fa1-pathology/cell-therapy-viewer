@@ -197,17 +197,31 @@ class CaseRegistry:
 
     def files(self, case_id):
         folder = self.directory(case_id)
+        # The folder identifies the URL only. A copied case keeps its original
+        # filenames; suffixes identify each asset without depending on a prefix.
+        entries = [source for source in folder.iterdir()
+                   if source.is_file() and not source.name.startswith(".")]
         files = {}
-        for key, suffixes in {
-            "he": ("_HE.tiff", "_HE.tif"),
-            "ihc": ("_IHC.tiff", "_IHC.tif"),
-            "mask": ("_HE.png",),
-            "annotations": ("_IHC.geojson",),
+        for key, (label, suffixes) in {
+            "he": ("H&E slide", ("_HE.tiff", "_HE.tif")),
+            "ihc": ("IHC slide", ("_IHC.tiff", "_IHC.tif")),
+            "mask": ("H&E mask", ("_HE.png",)),
+            "annotations": ("IHC annotations", ("_IHC.geojson",)),
         }.items():
-            source = next((folder / f"{case_id}{suffix}" for suffix in suffixes
-                           if (folder / f"{case_id}{suffix}").is_file()), None)
-            if source is None:
-                raise CaseError(f"Missing required file: {case_id}{suffixes[0]}", 422)
+            matches = sorted(
+                (source for source in entries
+                 if source.name.lower().endswith(tuple(suffix.lower() for suffix in suffixes))),
+                key=lambda source: source.name,
+            )
+            if not matches:
+                raise CaseError(
+                    f"Missing {label} in '{case_id}'. Expected one file ending in {' or '.join(suffixes)}.", 422)
+            if len(matches) > 1:
+                names = ", ".join(source.name for source in matches)
+                raise CaseError(
+                    f"Multiple files match {label} in '{case_id}': {names}. "
+                    "Keep one matching file per case folder.", 422)
+            source = matches[0]
             if not source.resolve().is_relative_to(self.root):
                 raise CaseError("Case files must remain inside the configured data root.", 422)
             files[key] = source

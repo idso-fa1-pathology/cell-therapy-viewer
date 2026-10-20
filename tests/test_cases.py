@@ -18,6 +18,76 @@ from server import CaseError, CaseRegistry, Handler, LocalServer, ROOT
 EXAMPLE = ROOT / "data" / "2606J01_511_2_Liv_19"
 
 
+class CaseFileDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        base = Path(self.temporary.name)
+        self.root = base / "data"
+        self.folder = self.root / "test link [copy]"
+        self.folder.mkdir(parents=True)
+        self.names = {
+            "he": "original_HE.tif",
+            "ihc": "original_IHC.tiff",
+            "mask": "original_HE.png",
+            "annotations": "original_IHC.geojson",
+        }
+        for name in self.names.values():
+            (self.folder / name).touch()
+        self.registry = CaseRegistry(self.root, base / "cache")
+
+    def tearDown(self):
+        self.registry.close()
+        self.temporary.cleanup()
+
+    def test_folder_can_be_renamed_without_renaming_any_files(self):
+        for name in ("test link [copy]", "test_link", "whatever α"):
+            target = self.root / name
+            if target != self.folder:
+                self.folder.rename(target)
+                self.folder = target
+            actual = self.registry.files(name)
+            self.assertEqual({key: source.name for key, source in actual.items()}, self.names)
+            self.assertTrue(all(source.parent == target.resolve() for source in actual.values()))
+
+    def test_suffix_matching_ignores_case_and_unrelated_or_hidden_files(self):
+        for name in self.names.values():
+            (self.folder / name).rename(self.folder / name.upper())
+        for name in ("notes.txt", "preview.png", "._original_HE.tif", ".backup_IHC.tiff"):
+            (self.folder / name).touch()
+        actual = self.registry.files(self.folder.name)
+        self.assertEqual({key: source.name for key, source in actual.items()},
+                         {key: name.upper() for key, name in self.names.items()})
+
+    def test_ambiguous_assets_are_rejected_even_if_one_matches_folder_name(self):
+        duplicate = self.folder / f"{self.folder.name}_HE.tiff"
+        duplicate.touch()
+        with self.assertRaises(CaseError) as caught:
+            self.registry.files(self.folder.name)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("Multiple files match H&E slide", str(caught.exception))
+        self.assertIn(duplicate.name, str(caught.exception))
+        self.assertIn(self.names["he"], str(caught.exception))
+
+    def test_missing_assets_report_the_required_suffix(self):
+        (self.folder / self.names["annotations"]).unlink()
+        with self.assertRaises(CaseError) as caught:
+            self.registry.files(self.folder.name)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("Missing IHC annotations", str(caught.exception))
+        self.assertIn("_IHC.geojson", str(caught.exception))
+
+    def test_discovered_files_cannot_escape_the_data_root(self):
+        outside = self.root.parent / "outside.png"
+        outside.touch()
+        mask = self.folder / self.names["mask"]
+        mask.unlink()
+        mask.symlink_to(outside)
+        with self.assertRaises(CaseError) as caught:
+            self.registry.files(self.folder.name)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("inside the configured data root", str(caught.exception))
+
+
 @unittest.skipUnless(EXAMPLE.exists(), "Provided slides are not present")
 class CaseRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -82,6 +152,28 @@ class CaseRoutingTests(unittest.TestCase):
         self.assertNotEqual(self.request(a["slides"]["he"]["mask"]["url"]), self.request(b["slides"]["he"]["mask"]["url"]))
         self.assertEqual(struct.unpack("<fff", self.request(a["annotations"]["url"])), (101, 300, 0))
         self.assertEqual(struct.unpack("<fff", self.request(b["annotations"]["url"])), (202, 300, 0))
+
+    def test_duplicate_folder_keeps_original_filenames_and_serves_all_assets(self):
+        original = self.manifest("case-A")
+        original_tile = self.request(original["slides"]["ihc"]["dzi"].replace(".dzi", "_files/10/0_0.jpeg"))
+        original_mask = self.request(original["slides"]["he"]["mask"]["url"])
+        original_points = self.request(original["annotations"]["url"])
+        for name in ("test_link", "test link"):
+            copied_folder = self.root / name
+            copied_folder.mkdir()
+            for source in (self.root / "case-A").iterdir():
+                os.link(source, copied_folder / source.name)
+            copied = self.manifest(name)
+            self.assertEqual(copied["case"]["id"], name)
+            self.assertEqual(copied["slides"]["he"]["filename"], "case-A_HE.tiff")
+            self.assertEqual(copied["slides"]["ihc"]["filename"], "case-A_IHC.tiff")
+            self.assertIn(f"/api/cases/{quote(name, safe='')}/", copied["slides"]["ihc"]["dzi"])
+            self.assertIn(b"<Image", self.request(copied["slides"]["ihc"]["dzi"]))
+            self.assertEqual(self.request(copied["slides"]["ihc"]["dzi"].replace(".dzi", "_files/10/0_0.jpeg")), original_tile)
+            self.assertEqual(self.request(copied["slides"]["he"]["mask"]["url"]), original_mask)
+            self.assertEqual(self.request(copied["annotations"]["url"]), original_points)
+            if (ROOT / "dist" / "index.html").exists():
+                self.assertIn(b"Pathology Viewer", self.request(f"/{quote(name, safe='')}/"))
 
     def test_new_folders_are_discovered_and_encoded_names_work(self):
         for name in ("case space α", "api-prefixed-case"):
