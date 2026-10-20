@@ -6,7 +6,7 @@ import './style.css';
 const element = id => document.getElementById(id);
 const format = value => value.toLocaleString('en-US');
 const viewers = {};
-const caseId = decodeURIComponent(window.location.pathname.split('/').filter(Boolean)[0] || '');
+const caseId = decodeURIComponent(window.location.pathname.replace(/^\/|\/$/g, ''));
 const manifestUrl = `/api/cases/${encodeURIComponent(caseId)}/manifest`;
 let pointOverlay, viewSync, worker, pollTimer, disposed = false;
 

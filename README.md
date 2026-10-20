@@ -6,7 +6,7 @@ The toolbar above the IHC slide lets you click a class's color swatch to recolor
 
 ## Data folders and URLs
 
-Choose one data root, anywhere on the host machine. Put each case in its own immediate subfolder. **The folder name determines the URL only.** Files are discovered by their `_HE` / `_IHC` suffixes, so you can copy or rename a folder without renaming its contents:
+Choose one data root, anywhere on the host machine. Put each case in its own folder, directly under the root or nested inside group folders. **The folder path determines the URL only.** Files are discovered by their `_HE` / `_IHC` suffixes, so you can copy or rename a folder without renaming its contents:
 
 ```text
 /path/to/slide-data/
@@ -15,31 +15,65 @@ Choose one data root, anywhere on the host machine. Put each case in its own imm
 │   ├── 2606J01_511_2_Liv_19_HE.png
 │   ├── 2606J01_511_2_Liv_19_IHC.tiff
 │   └── 2606J01_511_2_Liv_19_IHC.geojson
-└── test_link/
-    ├── 2606J01_511_2_Liv_19_HE.tiff
-    ├── 2606J01_511_2_Liv_19_HE.png
-    ├── 2606J01_511_2_Liv_19_IHC.tiff
-    └── 2606J01_511_2_Liv_19_IHC.geojson
+└── project_A/
+    └── test_link/
+        ├── 2606J01_511_2_Liv_19_HE.tiff
+        ├── 2606J01_511_2_Liv_19_HE.png
+        ├── 2606J01_511_2_Liv_19_IHC.tiff
+        └── 2606J01_511_2_Liv_19_IHC.geojson
 ```
 
 These open at:
 
 - `http://127.0.0.1:8000/2606J01_511_2_Liv_19/`
-- `http://127.0.0.1:8000/test_link/`
+- `http://127.0.0.1:8000/project_A/test_link/`
 
-On a remote machine, replace `127.0.0.1` with that machine's hostname or IP address. Opening `/` lists the available folders, or opens the case directly when there is only one. Direct links and browser refresh work; a missing trailing slash is added automatically.
+On a remote machine, replace `127.0.0.1` with that machine's hostname or IP address. Opening `/` lists the discovered cases with their full relative paths, or opens the case directly when there is only one. Direct links and browser refresh work; a missing trailing slash is added automatically. Existing top-level URLs such as `/test_link/` continue to work. Cases in different groups can share the same name without sharing slides or caches.
 
-Each folder must contain exactly one file for each role: `*_HE.tiff` (or `.tif`), `*_IHC.tiff` (or `.tif`), `*_HE.png`, and `*_IHC.geojson`. The prefixes can be anything; they do not have to match the folder name. Suffix matching is case-insensitive. Missing or multiple matches produce a visible error instead of guessing which slide or overlay to open. Unrelated files and hidden files such as macOS `._` sidecars are ignored.
+Each case must contain exactly one file for each role: `*_HE.tiff` (or `.tif`), `*_IHC.tiff` (or `.tif`), `*_HE.png`, and `*_IHC.geojson`. By default these files sit directly in the case folder; optional settings below select a different subdirectory for each role. The prefixes can be anything; they do not have to match the folder name. Suffix matching is case-insensitive. Missing or multiple matches produce a visible error instead of guessing which slide or overlay to open. Unrelated files and hidden files such as macOS `._` sidecars are ignored.
 
-The supplied case is in `data/2606J01_511_2_Liv_19/`. Spaces and Unicode in folder names are URL-encoded by the case list: a folder named `test link` opens at `/test%20link/`. Hidden folders and the reserved names `api`, `assets`, and `favicon.svg` are excluded.
+The supplied case is in `data/2606J01_511_2_Liv_19/`. Spaces and Unicode in folder names are URL-encoded by the case list: `project A/test link` opens at `/project%20A/test%20link/`. Hidden folders and the top-level reserved names `api`, `assets`, and `favicon.svg` are excluded. Discovery does not follow directory symlinks.
 
-New folders are discovered on request, without rebuilding or restarting. Copy a complete case into the data root before opening its URL. Restart the viewer after replacing files in an existing case. Slides and overlays are opened on demand; each case has separate, versioned resource URLs and annotation caches.
+Discovery walks group folders until it finds a folder containing at least one expected asset in its configured location. That folder is listed as a case, including incomplete cases so they can report missing files. Discovery stops below a case; put additional cases in sibling or group folders, not inside another case. Empty folders and folders containing only unrelated files are skipped.
+
+New folders are discovered on request, without rebuilding or restarting. Copy a complete case under the data root before opening its URL. Restart the viewer after replacing files in an existing case. Slides and overlays are opened on demand; each case has separate, versioned resource URLs and annotation caches.
+
+### Files in subdirectories within a case
+
+For example, every case can use this layout, with or without group folders:
+
+```text
+data/
+└── project_A/
+    └── test_link/
+        ├── slides/
+        │   ├── original_HE.tiff
+        │   └── original_IHC.tiff
+        └── results/
+            ├── masks/
+            │   └── original_HE.png
+            └── annotations/
+                └── original_IHC.geojson
+```
+
+Add these optional settings to your existing `.env`:
+
+```dotenv
+HE_SLIDE_SUBDIR=slides
+IHC_SLIDE_SUBDIR=slides
+HE_MASK_SUBDIR=results/masks
+IHC_ANNOTATIONS_SUBDIR=results/annotations
+```
+
+Compose passes them to the application; no separate mount or configuration entry is needed for each case or file. The URL stays `/project_A/test_link/`. These settings apply to **every case in this viewer instance** and select the exact directory to search for each role. Keep a setting as `.` (the default) if that file belongs directly in the case folder. Use relative paths inside the case, not absolute paths or `..`. Files elsewhere are ignored, so backups do not introduce ambiguous matches. To give H&E and IHC separate locations, for example, set `HE_SLIDE_SUBDIR=slides/he` and `IHC_SLIDE_SUBDIR=slides/ihc`.
+
+After changing these settings, run `docker compose up -d --build` from the application directory.
 
 ## Docker Compose
 
 Requires Docker with Compose. The image builds the frontend and installs the Python/OpenSlide runtime; no host Node or Python installation is needed.
 
-From this project directory:
+For a new installation, copy the example from this project directory. If `.env` already exists, keep it and add any desired settings:
 
 ```sh
 cp .env.example .env
@@ -81,6 +115,10 @@ Configuration:
 | `.env` setting | Default | Purpose |
 | --- | --- | --- |
 | `DATA_DIR` | `./data` | Host folder containing the case subfolders |
+| `HE_SLIDE_SUBDIR` | `.` | Directory within each case containing the H&E TIFF |
+| `IHC_SLIDE_SUBDIR` | `.` | Directory within each case containing the IHC TIFF |
+| `HE_MASK_SUBDIR` | `.` | Directory within each case containing the H&E PNG |
+| `IHC_ANNOTATIONS_SUBDIR` | `.` | Directory within each case containing the IHC GeoJSON |
 | `VIEWER_PORT` | `8000` | Host port; the container always listens on port 8000 |
 | `VIEWER_BIND_ADDRESS` | `0.0.0.0` | Host interface on which to publish the port |
 | `VIEWER_IMAGE` | `pathology-viewer:local` | Image name/tag to build and run |
@@ -127,11 +165,12 @@ To prepare all cases, or just one case, without starting a server:
 ```sh
 npm run prepare:data
 npm run prepare:data -- --case 2606J01_511_2_Liv_19
+npm run prepare:data -- --case "project A/test link"
 ```
 
 For frontend development, keep `npm start` running in one terminal, run `npm run dev` in another, and open the Vite URL. Vite proxies `/` and `/api` to port 8000 and serves the frontend at each case path. A production build needs only `npm start`.
 
-The Python server accepts `--data-dir`, `--cache-dir`, `--host`, `--port`, and `--max-open-cases`, or their environment equivalents `DATA_DIR`, `CACHE_DIR`, `VIEWER_HOST`, `VIEWER_PORT`, and `MAX_OPEN_CASES`. Unlike Docker Compose, native startup does not load `.env` automatically.
+The Python server accepts `--data-dir`, `--cache-dir`, `--host`, `--port`, and `--max-open-cases`, or their environment equivalents `DATA_DIR`, `CACHE_DIR`, `VIEWER_HOST`, `VIEWER_PORT`, and `MAX_OPEN_CASES`. The subdirectory settings also work natively through the environment or `--he-slide-subdir`, `--ihc-slide-subdir`, `--he-mask-subdir`, and `--ihc-annotations-subdir`. Unlike Docker Compose, native startup does not load `.env` automatically.
 
 ```sh
 .venv/bin/python server.py --data-dir /path/to/slide-data --host 0.0.0.0 --port 8001
@@ -184,9 +223,9 @@ To use an installed Google Chrome instead:
 PLAYWRIGHT_CHANNEL=chrome npm run test:browser
 ```
 
-Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, copied folders with unchanged filenames, case-insensitive suffix discovery, ambiguous matches, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests.
+Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, copied folders with unchanged filenames, nested cases sharing a leaf name, configured asset subdirectories, case-insensitive suffix discovery, ambiguous matches, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests. The nested-layout browser test starts a separate temporary native server to verify environment configuration, URL decoding, slide and overlay loading, and refresh together.
 
-Verification on October 20, 2026: all **27 tests passed** (3 JavaScript, 16 Python, 8 Chrome browser tests), including copied folders with unchanged filenames, bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. Browser tests ran against the Compose service. Docker images built successfully for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
+Verification on October 20, 2026: all **34 tests passed** (3 JavaScript, 22 Python, 9 Chrome browser tests), including nested case URLs with configured asset subdirectories, copied folders with unchanged filenames, bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. The existing browser suite ran against the rebuilt Compose service; the nested-layout test used its isolated native server. Earlier Docker builds succeeded for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
 
 A previous exhaustive comparison verified all 298,344 source coordinates and class IDs; maximum Float32 coordinate error was 0.0009766 image pixels. Cellular-resolution inspection at approximately 115% image zoom showed points tracking individual cells.
 

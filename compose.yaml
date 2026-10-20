@@ -24,6 +24,11 @@ services:
       DATA_DIR: /data
       CACHE_DIR: /cache
       MAX_OPEN_CASES: ${MAX_OPEN_CASES:-4}
+      # Relative to every case folder; "." keeps files directly in the case.
+      HE_SLIDE_SUBDIR: ${HE_SLIDE_SUBDIR:-.}
+      IHC_SLIDE_SUBDIR: ${IHC_SLIDE_SUBDIR:-.}
+      HE_MASK_SUBDIR: ${HE_MASK_SUBDIR:-.}
+      IHC_ANNOTATIONS_SUBDIR: ${IHC_ANNOTATIONS_SUBDIR:-.}
     volumes:
       - type: bind
         source: ${DATA_DIR:-./data}

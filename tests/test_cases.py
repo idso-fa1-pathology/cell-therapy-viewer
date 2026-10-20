@@ -87,6 +87,60 @@ class CaseFileDiscoveryTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 422)
         self.assertIn("inside the configured data root", str(caught.exception))
 
+    def test_nested_cases_are_discovered_with_full_encoded_paths(self):
+        target = self.root / "project A" / "batch α" / self.folder.name
+        target.parent.mkdir(parents=True)
+        self.folder.rename(target)
+        (self.root / "empty group" / "notes").mkdir(parents=True)
+        name = target.relative_to(self.root).as_posix()
+        self.assertEqual(self.registry.list_cases(), [
+            {"id": name, "url": "/" + quote(name, safe="/") + "/"},
+        ])
+        self.assertEqual({key: source.name for key, source in self.registry.files(name).items()}, self.names)
+
+    def test_discovery_stops_at_cases_and_skips_hidden_folders_and_symlink_cycles(self):
+        for folder in (self.folder / "backup", self.root / ".hidden"):
+            folder.mkdir()
+            for name in self.names.values():
+                (folder / name).touch()
+        (self.root / "loop").symlink_to(self.root, target_is_directory=True)
+        self.assertEqual([case["id"] for case in self.registry.list_cases()], [self.folder.name])
+
+    def test_each_asset_can_use_a_configured_subdirectory(self):
+        layout = {"he": "slides/he", "ihc": "slides/ihc",
+                  "mask": "overlays/masks", "annotations": "analysis/geojson"}
+        self.registry.close()
+        self.registry = CaseRegistry(self.root, self.root.parent / "cache", file_subdirs=layout)
+        for key, name in self.names.items():
+            destination = self.folder / layout[key] / name
+            destination.parent.mkdir(parents=True)
+            (self.folder / name).rename(destination)
+            # Files elsewhere must not be selected or cause ambiguous matches.
+            (self.folder / name).touch()
+        found = self.registry.files(self.folder.name)
+        for key, source in found.items():
+            self.assertEqual(source, (self.folder / layout[key] / self.names[key]).resolve())
+        self.assertEqual([case["id"] for case in self.registry.list_cases()], [self.folder.name])
+        found["annotations"].unlink()
+        with self.assertRaises(CaseError) as caught:
+            self.registry.files(self.folder.name)
+        self.assertIn("analysis/geojson", str(caught.exception))
+
+    def test_invalid_configured_subdirectories_and_case_paths_are_rejected(self):
+        for value in ("../sibling", "/absolute", "slides/../../outside", "slides\\outside", "slides//he"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "HE_SLIDE_SUBDIR"):
+                CaseRegistry(self.root, self.root.parent / "cache", file_subdirs={"he": value})
+        for name in ("../outside", "project/../case", "/case", "project//case", "project/.hidden/case"):
+            with self.subTest(name=name), self.assertRaises(CaseError):
+                self.registry.directory(name)
+        # A configured path must stay within its case even if a symlink points
+        # elsewhere inside the data root.
+        (self.root / "other").mkdir()
+        (self.folder / "slides").symlink_to(self.root / "other", target_is_directory=True)
+        self.registry.file_subdirs["he"] = "slides"
+        with self.assertRaisesRegex(CaseError, "inside their case folder"):
+            self.registry.files(self.folder.name)
+
 
 @unittest.skipUnless(EXAMPLE.exists(), "Provided slides are not present")
 class CaseRoutingTests(unittest.TestCase):
@@ -186,6 +240,60 @@ class CaseRoutingTests(unittest.TestCase):
             if (ROOT / "dist" / "index.html").exists():
                 self.assertIn(b"Pathology Viewer", self.request(f"/{quote(name, safe='')}/"))
 
+    def test_nested_cases_with_same_leaf_name_keep_assets_and_caches_separate(self):
+        paths = ("project A/batch α/test link", "project B/batch α/test link")
+        for old, new in zip(("case-A", "case-B"), paths):
+            destination = self.root / new
+            destination.parent.mkdir(parents=True)
+            (self.root / old).rename(destination)
+        cases = json.loads(self.request("/api/cases"))["cases"]
+        self.assertEqual({case["id"] for case in cases}, set(paths))
+        for case in cases:
+            self.assertEqual(case["url"], f"/{quote(case['id'], safe='/')}/")
+            if (ROOT / "dist" / "index.html").exists():
+                for url in (case["url"].removesuffix("/"), case["url"]):
+                    with urlopen(self.base + url, timeout=5) as response:
+                        self.assertEqual(response.url, self.base + case["url"])
+                        self.assertIn(b"Pathology Viewer", response.read())
+        a, b = map(self.manifest, paths)
+        for manifest in (a, b):
+            for key in ("he", "ihc"):
+                self.assertIn(b"<Image", self.request(manifest["slides"][key]["dzi"]))
+        self.assertNotEqual(
+            self.request(a["slides"]["ihc"]["dzi"].replace(".dzi", "_files/10/0_0.jpeg")),
+            self.request(b["slides"]["ihc"]["dzi"].replace(".dzi", "_files/10/0_0.jpeg")),
+        )
+        self.assertNotEqual(self.request(a["slides"]["he"]["mask"]["url"]), self.request(b["slides"]["he"]["mask"]["url"]))
+        self.assertEqual(struct.unpack("<fff", self.request(a["annotations"]["url"])), (101, 300, 0))
+        self.assertEqual(struct.unpack("<fff", self.request(b["annotations"]["url"])), (202, 300, 0))
+        self.assertNotEqual(self.registry.cases[paths[0]].cache, self.registry.cases[paths[1]].cache)
+
+    def test_configured_asset_subdirectories_work_inside_nested_cases(self):
+        layout = {"he": "slides", "ihc": "slides",
+                  "mask": "results/masks", "annotations": "results/annotations"}
+        self.registry.close()
+        self.registry = CaseRegistry(self.root, Path(self.temporary.name) / "cache", file_subdirs=layout)
+        self.server.registry = self.registry
+        case_id = "project/renamed case"
+        destination = self.root / case_id
+        destination.parent.mkdir()
+        (self.root / "case-A").rename(destination)
+        names = {"he": "case-A_HE.tiff", "ihc": "case-A_IHC.tiff",
+                 "mask": "case-A_HE.png", "annotations": "case-A_IHC.geojson"}
+        for key, name in names.items():
+            folder = destination / layout[key]
+            folder.mkdir(parents=True, exist_ok=True)
+            (destination / name).rename(folder / name)
+        manifest = self.manifest(case_id)
+        cases = json.loads(self.request("/api/cases"))["cases"]
+        self.assertEqual(cases, [{"id": case_id, "url": "/project/renamed%20case/"}])
+        self.assertEqual(manifest["slides"]["he"]["filename"], names["he"])
+        tile = self.request(manifest["slides"]["he"]["dzi"].replace(".dzi", "_files/10/0_0.jpeg"))
+        self.assertGreater(Image.open(BytesIO(tile)).width, 0)
+        mask = self.request(manifest["slides"]["he"]["mask"]["url"])
+        self.assertEqual(Image.open(BytesIO(mask)).size, (717, 942))
+        self.assertEqual(struct.unpack("<fff", self.request(manifest["annotations"]["url"])), (101, 300, 0))
+
     @unittest.skipUnless((ROOT / "dist" / "index.html").exists(), "Run npm run build for page routing checks")
     def test_deep_links_refresh_and_trailing_slash(self):
         for suffix in ("/case-A", "/case-A/", "/case-B/"):
@@ -215,6 +323,9 @@ class CaseRoutingTests(unittest.TestCase):
             ("/api/cases/unknown/manifest", 404),
             ("/api/cases/incomplete/manifest", 422),
             ("/api/cases/%2e%2e/manifest", 404),
+            ("/api/cases/project%2F..%2Fcase-A/manifest", 404),
+            ("/project/%2e%2e/case-A/", 404),
+            ("/project//case-A/", 404),
             ("/api/cases/escape/manifest", 404),
             ("/api/cases/case-A/../../server.py", 404),
             ("/assets/../../server.py", 404),

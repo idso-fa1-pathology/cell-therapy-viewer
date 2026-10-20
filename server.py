@@ -1,4 +1,4 @@
-"""Folder-based slide viewer: one case per data-root directory, one URL per case."""
+"""Folder-based slide viewer: one URL per case, including nested case folders."""
 import argparse
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -24,6 +24,12 @@ from PIL import Image, ImageChops
 from prepare import prepare_points
 
 ROOT = Path(__file__).resolve().parent
+ASSETS = {
+    "he": ("H&E slide", ("_HE.tiff", "_HE.tif"), "HE_SLIDE_SUBDIR"),
+    "ihc": ("IHC slide", ("_IHC.tiff", "_IHC.tif"), "IHC_SLIDE_SUBDIR"),
+    "mask": ("H&E mask", ("_HE.png",), "HE_MASK_SUBDIR"),
+    "annotations": ("IHC annotations", ("_IHC.geojson",), "IHC_ANNOTATIONS_SUBDIR"),
+}
 
 
 class CaseError(Exception):
@@ -33,9 +39,16 @@ class CaseError(Exception):
 
 
 def valid_case_id(name):
-    return (0 < len(name) <= 200 and not name.startswith(".")
-            and name not in {"api", "assets", "favicon.svg"}
-            and not any(char in "/\\" or ord(char) < 32 for char in name))
+    parts = name.split("/")
+    return (0 < len(name) <= 2000
+            and parts[0] not in {"api", "assets", "favicon.svg"}
+            and all(0 < len(part) <= 200 and not part.startswith(".")
+                    and not any(char == "\\" or ord(char) < 32 for char in part)
+                    for part in parts))
+
+
+def case_url(case_id):
+    return f"/{quote(case_id, safe='/')}/"
 
 
 def mask_rgba(source):
@@ -166,12 +179,18 @@ class ViewerData:
 
 class CaseRegistry:
     """A small LRU of open cases. Requests and preprocessing pin their handles."""
-    def __init__(self, root, cache, max_open=4):
+    def __init__(self, root, cache, max_open=4, file_subdirs=None):
         self.root, self.cache = Path(root).resolve(), Path(cache).resolve()
         if not self.root.is_dir():
             raise ValueError(f"Data root does not exist: {self.root}. Set DATA_DIR to your case-folder parent.")
         if max_open < 1:
             raise ValueError("MAX_OPEN_CASES must be at least 1.")
+        self.file_subdirs = {}
+        for key, (_, _, variable) in ASSETS.items():
+            value = (file_subdirs or {}).get(key) or "."
+            if value != "." and (not valid_case_id("case/" + value)):
+                raise ValueError(f"{variable} must be a relative subdirectory inside each case, or '.' for the case folder.")
+            self.file_subdirs[key] = value
         self.cache.mkdir(parents=True, exist_ok=True)
         self.max_open = max_open
         self.cases = OrderedDict()
@@ -184,43 +203,66 @@ class CaseRegistry:
         if not valid_case_id(case_id):
             raise CaseError("Invalid case name.")
         folder = (self.root / case_id).resolve()
-        if folder.parent != self.root or not folder.is_dir():
+        if folder == self.root or not folder.is_relative_to(self.root) or not folder.is_dir():
             raise CaseError(f"Case '{case_id}' was not found.")
         return folder
 
     def list_cases(self):
         result = []
-        for folder in self.root.iterdir():
-            if valid_case_id(folder.name) and folder.is_dir() and folder.resolve().parent == self.root:
-                result.append({"id": folder.name, "url": f"/{quote(folder.name, safe='')}/"})
+        # Group folders have no matching assets. Once a case is found, its
+        # subfolders belong to that case rather than becoming separate cases.
+        # Never follow directory symlinks during discovery (cycles/duplicates).
+        for directory, children, _ in os.walk(self.root, followlinks=False):
+            folder = Path(directory)
+            children[:] = [
+                name for name in children
+                if valid_case_id((folder / name).relative_to(self.root).as_posix())
+                and not (folder / name).is_symlink()
+            ]
+            if folder == self.root:
+                continue
+            for key in ASSETS:
+                try:
+                    matches = self.asset_matches(folder, key)
+                except CaseError:
+                    continue
+                if matches:
+                    case_id = folder.relative_to(self.root).as_posix()
+                    result.append({"id": case_id, "url": case_url(case_id)})
+                    children.clear()
+                    break
         return sorted(result, key=lambda case: case["id"].casefold())
+
+    def asset_matches(self, folder, key):
+        source_dir = (folder / self.file_subdirs[key]).resolve()
+        if not source_dir.is_relative_to(folder):
+            raise CaseError("Asset subdirectories must remain inside their case folder.", 422)
+        if not source_dir.is_dir():
+            return []
+        suffixes = tuple(suffix.lower() for suffix in ASSETS[key][1])
+        return sorted(
+            (source for source in source_dir.iterdir()
+             if not source.name.startswith(".") and source.is_file()
+             and source.name.lower().endswith(suffixes)),
+            key=lambda source: source.name,
+        )
 
     def files(self, case_id):
         folder = self.directory(case_id)
         # The folder identifies the URL only. A copied case keeps its original
         # filenames; suffixes identify each asset without depending on a prefix.
-        entries = [source for source in folder.iterdir()
-                   if source.is_file() and not source.name.startswith(".")]
         files = {}
-        for key, (label, suffixes) in {
-            "he": ("H&E slide", ("_HE.tiff", "_HE.tif")),
-            "ihc": ("IHC slide", ("_IHC.tiff", "_IHC.tif")),
-            "mask": ("H&E mask", ("_HE.png",)),
-            "annotations": ("IHC annotations", ("_IHC.geojson",)),
-        }.items():
-            matches = sorted(
-                (source for source in entries
-                 if source.name.lower().endswith(tuple(suffix.lower() for suffix in suffixes))),
-                key=lambda source: source.name,
-            )
+        for key, (label, suffixes, _) in ASSETS.items():
+            matches = self.asset_matches(folder, key)
+            location = (Path(case_id) / self.file_subdirs[key]).as_posix()
             if not matches:
                 raise CaseError(
-                    f"Missing {label} in '{case_id}'. Expected one file ending in {' or '.join(suffixes)}.", 422)
+                    f"Missing {label} in '{location}'. Expected one file ending in {' or '.join(suffixes)}.", 422)
             if len(matches) > 1:
                 names = ", ".join(source.name for source in matches)
                 raise CaseError(
-                    f"Multiple files match {label} in '{case_id}': {names}. "
-                    "Keep one matching file per case folder.", 422)
+                    f"Multiple files match {label} in '{location}': {names}. "
+                    "Keep one matching file per configured subdirectory.", 422)
             source = matches[0]
             if not source.resolve().is_relative_to(self.root):
                 raise CaseError("Case files must remain inside the configured data root.", 422)
@@ -300,16 +342,19 @@ class Handler(BaseHTTPRequestHandler):
         self.route(head=True)
 
     def route(self, head):
-        path = unquote(urlsplit(self.path).path)
+        raw_path = urlsplit(self.path).path
+        path = unquote(raw_path)
         registry = self.server.registry
         try:
             if path == "/api/health":
                 self.send_json({"status": "ok"}, head)
             elif path == "/api/cases":
                 self.send_json({"cases": registry.list_cases()}, head)
-            elif match := re.fullmatch(r"/api/cases/([^/]+)/(.+)", path):
-                with registry.acquire(match[1]) as data:
-                    self.case_resource(data, match[2], head)
+            elif match := re.fullmatch(r"/api/cases/([^/]+)/(.+)", raw_path):
+                # The API encodes the entire relative case path as one segment.
+                # Split before decoding so nested paths cannot become resources.
+                with registry.acquire(unquote(match[1])) as data:
+                    self.case_resource(data, unquote(match[2]), head)
             elif path == "/api" or path.startswith("/api/"):
                 raise CaseError("Unknown API resource.")
             elif path == "/":
@@ -320,10 +365,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_catalog(cases, head)
             elif path == "/favicon.svg" or path.startswith("/assets/"):
                 self.static_file(path.lstrip("/"), head)
-            elif match := re.fullmatch(r"/([^/]+)(/?)", path):
-                registry.directory(match[1])
-                if not match[2]:
-                    self.redirect(f"/{quote(match[1], safe='')}/")
+            elif path.startswith("/"):
+                case_id = path[1:].removesuffix("/")
+                registry.directory(case_id)
+                if not path.endswith("/"):
+                    self.redirect(case_url(case_id))
                 else:
                     self.static_file("index.html", head)
             else:
@@ -374,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
     def send_catalog(self, cases, head):
         links = "".join(f'<li><a href="{escape(case["url"], quote=True)}">{escape(case["id"])}</a></li>' for case in cases)
         content = f'<ul>{links}</ul>' if cases else (
-            '<p>No case folders found. Add a folder named after your slide to the configured data root.</p>'
+            '<p>No case folders found. Add a case folder under the configured data root; group subfolders are supported.</p>'
             '<pre>data/CASE_ID/\n  CASE_ID_HE.tiff\n  CASE_ID_HE.png\n  CASE_ID_IHC.tiff\n  CASE_ID_IHC.geojson</pre>')
         page = ('<!doctype html><html lang="en"><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -423,10 +469,15 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=Path(os.environ.get("DATA_DIR", ROOT / "data")))
     parser.add_argument("--cache-dir", type=Path, default=Path(os.environ.get("CACHE_DIR", ROOT / ".cache" / "cases")))
     parser.add_argument("--max-open-cases", type=int, default=int(os.environ.get("MAX_OPEN_CASES", "4")))
+    for _, (label, _, variable) in ASSETS.items():
+        parser.add_argument("--" + variable.lower().replace("_", "-"),
+                            default=os.environ.get(variable, "."),
+                            help=f"Subdirectory within each case containing the {label}; default: case folder.")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--case", help="Prepare only this case with --prepare-only; defaults to all cases.")
     args = parser.parse_args()
-    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases)
+    file_subdirs = {key: getattr(args, variable.lower()) for key, (_, _, variable) in ASSETS.items()}
+    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases, file_subdirs)
     if args.prepare_only:
         failed = False
         try:
@@ -443,7 +494,7 @@ def main():
         raise SystemExit(1 if failed else 0)
     server = LocalServer((args.host, args.port), Handler, registry)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
-    print(f"Pathology Viewer: http://{args.host}:{args.port}\nData root: {registry.root}", flush=True)
+    print(f"Pathology Viewer: http://{args.host}:{server.server_port}\nData root: {registry.root}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
