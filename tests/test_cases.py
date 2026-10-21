@@ -204,6 +204,98 @@ class CaseFileDiscoveryTests(unittest.TestCase):
             self.registry.files(self.folder.name)
 
 
+class CohortDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "data"
+        self.root.mkdir()
+        self.registry = CaseRegistry(self.root, self.root.parent / "cache",
+                                     file_paths=COHORT_PATHS, layout="cohort")
+
+    def tearDown(self):
+        self.registry.close()
+        self.temporary.cleanup()
+
+    def make_slide(self, cohort, slide):
+        files = {}
+        for key, template in COHORT_PATHS.items():
+            source = self.root / cohort / template.replace("{slide}", slide)
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.touch()
+            files[key] = source.resolve()
+        return files
+
+    def test_discovery_uses_he_filenames_across_cohorts_without_slide_folders(self):
+        self.assertEqual(self.registry.list_cases(), [])
+        ids = []
+        for cohort, slide in (("26-490", "26-490-145-liver"), ("26-490", "26-490-146-liver"),
+                              ("cohort α", "26-490-145-liver"), ("cohort α", "slide [copy]")):
+            expected = self.make_slide(cohort, slide)
+            case_id = f"{cohort}/{slide}"
+            ids.append(case_id)
+            self.assertFalse((self.root / case_id).exists())
+            self.assertEqual(self.registry.directory(case_id), (self.root / cohort).resolve())
+            self.assertEqual(self.registry.files(case_id), expected)
+            # New slides appear without restarting or reconfiguring the registry.
+            self.assertEqual({item["id"] for item in self.registry.list_cases()}, set(ids))
+        for path in ("26-490/HE-Stains/preview_HE.png", "26-490/HE-Stains/._hidden_HE.tiff",
+                     "26-490/HE-Stains/_HE.tiff", "26-490/HE-Recogs-bk/backup_HE.tiff",
+                     "26-490/RawScans/other_HE.tiff", ".hidden/HE-Stains/hidden_HE.tiff"):
+            source = self.root / path
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.touch()
+        self.assertEqual(self.registry.list_cases(), [
+            {"id": name, "url": f"/{quote(name, safe='/')}/"} for name in sorted(ids, key=str.casefold)
+        ])
+
+    def test_missing_overlay_is_reported_for_discovered_slide(self):
+        case_id = "26-490/26-490-145-liver"
+        files = self.make_slide(*case_id.split("/"))
+        files["mask"].unlink()
+        # The H&E preview must not silently replace the segmentation mask.
+        (files["he"].parent / "26-490-145-liver_HE.png").touch()
+        self.assertEqual([case["id"] for case in self.registry.list_cases()], [case_id])
+        with self.assertRaises(CaseError) as caught:
+            self.registry.files(case_id)
+        self.assertEqual(caught.exception.status, 422)
+        self.assertIn("HE-Recogs/Segformer-mit_b5/26-490-145-liver_HE.png", str(caught.exception))
+
+    def test_unknown_slides_and_invalid_cohort_urls_are_rejected(self):
+        self.make_slide("26-490", "known")
+        for name in ("26-490/unknown", "unknown/known", "26-490", "26-490/a/b",
+                     "../known", "26-490/../known", "26-490//known", "26-490/.hidden"):
+            with self.subTest(name=name), self.assertRaises(CaseError) as caught:
+                self.registry.directory(name)
+            self.assertEqual(caught.exception.status, 404)
+
+    def test_cohort_paths_cannot_read_assets_from_another_cohort(self):
+        a = self.make_slide("cohort-A", "same")
+        b = self.make_slide("cohort-B", "same")
+        a["mask"].unlink()
+        a["mask"].symlink_to(b["mask"])
+        with self.assertRaisesRegex(CaseError, "inside their cohort folder"):
+            self.registry.files("cohort-A/same")
+        a["he"].unlink()
+        a["he"].symlink_to(b["he"])
+        (self.root / "alias").symlink_to(self.root / "cohort-B", target_is_directory=True)
+        outside = self.root.parent / "outside"
+        outside.mkdir()
+        (self.root / "escape").symlink_to(outside, target_is_directory=True)
+        self.assertEqual([case["id"] for case in self.registry.list_cases()], ["cohort-B/same"])
+        with self.assertRaises(CaseError):
+            self.registry.directory("escape/same")
+
+    def test_cohort_layout_requires_slide_specific_paths_and_fixed_he_directory(self):
+        for options, message in (
+            ({"layout": "unknown"}, "DATA_LAYOUT"),
+            ({"layout": "cohort"}, "HE_SLIDE_PATH"),
+            ({"layout": "cohort", "file_paths": {**COHORT_PATHS, "annotations": "shared.geojson"}}, "IHC_ANNOTATIONS_PATH"),
+            ({"layout": "cohort", "file_paths": {**COHORT_PATHS, "he": "HE-Stains/{slide}/{slide}_HE.tiff"}}, "fixed parent directory"),
+        ):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, message):
+                CaseRegistry(self.root, self.root.parent / "invalid-cache", **options)
+
+
 @unittest.skipUnless(EXAMPLE.exists(), "Provided slides are not present")
 class CaseRoutingTests(unittest.TestCase):
     def setUp(self):
@@ -384,6 +476,46 @@ class CaseRoutingTests(unittest.TestCase):
             self.assertEqual(struct.unpack("<fff", self.request(manifest["annotations"]["url"])), (x, 300, 0))
             if (ROOT / "dist" / "index.html").exists():
                 self.assertIn(b"Pathology Viewer", self.request(f"/{name}/"))
+
+    def test_shared_cohort_folders_serve_virtual_case_urls_and_isolate_slides(self):
+        self.registry.close()
+        self.registry = CaseRegistry(self.root, Path(self.temporary.name) / "cache",
+                                     file_paths=COHORT_PATHS, layout="cohort")
+        self.server.registry = self.registry
+        names = ("26-490/26-490-145-liver", "26-490/26-490-146-liver", "cohort α/26-490-145-liver")
+        for old, name in zip(("case-A", "case-B", "case-B"), names):
+            cohort, slide = name.split("/")
+            sources = {"he": f"{old}_HE.tiff", "ihc": f"{old}_IHC.tiff",
+                       "mask": f"{old}_HE.png", "annotations": f"{old}_IHC.geojson"}
+            for key, template in COHORT_PATHS.items():
+                target = self.root / cohort / template.replace("{slide}", slide)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.link(self.root / old / sources[key], target)
+            self.assertFalse((self.root / name).exists())
+        cases = json.loads(self.request("/api/cases"))["cases"]
+        self.assertEqual({case["id"] for case in cases}, set(names))
+        manifests = []
+        for name, x in zip(names, (101, 202, 202)):
+            manifest = self.manifest(name)
+            manifests.append(manifest)
+            for key in ("he", "ihc"):
+                self.assertIn(b"<Image", self.request(manifest["slides"][key]["dzi"]))
+                tile = self.request(manifest["slides"][key]["dzi"].replace(".dzi", "_files/10/0_0.jpeg"))
+                self.assertGreater(Image.open(BytesIO(tile)).width, 0)
+            self.assertEqual(struct.unpack("<fff", self.request(manifest["annotations"]["url"])), (x, 300, 0))
+            if (ROOT / "dist" / "index.html").exists():
+                for url in (f"/{quote(name, safe='/')}", f"/{quote(name, safe='/')}/"):
+                    with urlopen(self.base + url, timeout=5) as response:
+                        self.assertTrue(response.url.endswith("/"))
+                        self.assertIn(b"Pathology Viewer", response.read())
+        a, b, other_cohort = manifests
+        self.assertNotEqual(self.request(a["slides"]["he"]["mask"]["url"]), self.request(b["slides"]["he"]["mask"]["url"]))
+        self.assertNotEqual(a["annotations"]["url"], other_cohort["annotations"]["url"])
+        for name in names:
+            self.assertTrue((self.registry.cache / name).is_dir())
+        with self.assertRaises(HTTPError) as caught:
+            self.request("/26-490/unknown/")
+        self.assertEqual(caught.exception.code, 404)
 
     @unittest.skipUnless((ROOT / "dist" / "index.html").exists(), "Run npm run build for page routing checks")
     def test_deep_links_refresh_and_trailing_slash(self):

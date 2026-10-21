@@ -30,6 +30,23 @@ const layouts = [
       IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
     },
   },
+  {
+    name: 'shared file-type folders within a cohort', caseId: '26-490/26-490-145-liver',
+    sharedCohort: true,
+    files: {
+      he: 'HE-Stains/26-490-145-liver_HE.tiff',
+      ihc: 'IHC-Regs/26-490-145-liver/26-490-145-liver_IHC_Reg.tiff',
+      mask: 'HE-Recogs/Segformer-mit_b5/26-490-145-liver_HE.png',
+      annotations: 'IHC-Regs/26-490-145-liver/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+    },
+    environment: {
+      DATA_LAYOUT: 'cohort',
+      HE_SLIDE_PATH: 'HE-Stains/{slide}_HE.tiff',
+      IHC_SLIDE_PATH: 'IHC-Regs/{slide}/{slide}_IHC_Reg.tiff',
+      HE_MASK_PATH: 'HE-Recogs/Segformer-mit_b5/{slide}_HE.png',
+      IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+    },
+  },
 ];
 
 for (const layout of layouts) {
@@ -38,7 +55,7 @@ test(`nested case URL loads and refreshes with ${layout.name}`, async ({ page })
   const temporary = await fs.mkdtemp(path.resolve('.cache/nested-browser-'));
   const caseId = layout.caseId;
   const dataRoot = path.join(temporary, 'data');
-  const folder = path.join(dataRoot, caseId);
+  const folder = path.join(dataRoot, layout.sharedCohort ? caseId.split('/')[0] : caseId);
   let server, closed;
   try {
     for (const filename of Object.values(layout.files)) {
@@ -56,12 +73,15 @@ test(`nested case URL loads and refreshes with ${layout.name}`, async ({ page })
       type: 'Feature', geometry: { type: 'Point', coordinates: [10000, 15000] },
       properties: { classification: { name: 'Nested annotation', color: [255, 0, 0] } },
     }));
+    if (layout.sharedCohort) {
+      expect(await fs.stat(path.join(dataRoot, caseId)).then(() => true, () => false)).toBe(false);
+    }
     server = spawn('.venv/bin/python', [
       'server.py', '--host', '127.0.0.1', '--port', '0',
       '--data-dir', dataRoot, '--cache-dir', path.join(temporary, 'cache'),
     ], {
       env: {
-        ...process.env, HE_SLIDE_SUBDIR: '.', IHC_SLIDE_SUBDIR: '.',
+        ...process.env, DATA_LAYOUT: 'case', HE_SLIDE_SUBDIR: '.', IHC_SLIDE_SUBDIR: '.',
         HE_MASK_SUBDIR: '.', IHC_ANNOTATIONS_SUBDIR: '.',
         HE_SLIDE_PATH: '', IHC_SLIDE_PATH: '', HE_MASK_PATH: '', IHC_ANNOTATIONS_PATH: '',
         ...layout.environment,
@@ -81,6 +101,10 @@ test(`nested case URL loads and refreshes with ${layout.name}`, async ({ page })
       if (server.exitCode !== null) throw new Error(output);
       return baseURL;
     }).toBeTruthy();
+    const catalog = await page.request.get(`${baseURL}/api/cases`);
+    expect((await catalog.json()).cases).toEqual([
+      { id: caseId, url: '/' + caseId.split('/').map(encodeURIComponent).join('/') + '/' },
+    ]);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('response', response => {

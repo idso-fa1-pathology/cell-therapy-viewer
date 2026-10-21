@@ -22,6 +22,7 @@ services:
       VIEWER_HOST: 0.0.0.0
       VIEWER_PORT: "8000"
       DATA_DIR: /data
+      DATA_LAYOUT: ${DATA_LAYOUT:-case}
       CACHE_DIR: /cache
       MAX_OPEN_CASES: ${MAX_OPEN_CASES:-4}
       # Relative to every case folder; "." keeps files directly in the case.
@@ -29,7 +30,8 @@ services:
       IHC_SLIDE_SUBDIR: ${IHC_SLIDE_SUBDIR:-.}
       HE_MASK_SUBDIR: ${HE_MASK_SUBDIR:-.}
       IHC_ANNOTATIONS_SUBDIR: ${IHC_ANNOTATIONS_SUBDIR:-.}
-      # Optional exact paths within each case; {slide} is its folder name.
+      # Exact paths within each case (case layout) or cohort (cohort layout).
+      # {slide} is the last part of the case URL.
       # A nonempty PATH overrides the corresponding SUBDIR/suffix search.
       HE_SLIDE_PATH: ${HE_SLIDE_PATH:-}
       IHC_SLIDE_PATH: ${IHC_SLIDE_PATH:-}

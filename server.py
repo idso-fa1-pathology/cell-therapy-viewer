@@ -1,4 +1,4 @@
-"""Folder-based slide viewer: one URL per case, including nested case folders."""
+"""Slide viewer with case folders or shared file-type folders within cohorts."""
 import argparse
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -179,12 +179,15 @@ class ViewerData:
 
 class CaseRegistry:
     """A small LRU of open cases. Requests and preprocessing pin their handles."""
-    def __init__(self, root, cache, max_open=4, file_subdirs=None, file_paths=None):
+    def __init__(self, root, cache, max_open=4, file_subdirs=None, file_paths=None, layout="case"):
         self.root, self.cache = Path(root).resolve(), Path(cache).resolve()
         if not self.root.is_dir():
             raise ValueError(f"Data root does not exist: {self.root}. Set DATA_DIR to your case-folder parent.")
         if max_open < 1:
             raise ValueError("MAX_OPEN_CASES must be at least 1.")
+        if layout not in {"case", "cohort"}:
+            raise ValueError("DATA_LAYOUT must be 'case' or 'cohort'.")
+        self.layout = layout
         self.file_subdirs, self.file_paths = {}, {}
         for key, (_, _, variable) in ASSETS.items():
             value = (file_subdirs or {}).get(key) or "."
@@ -200,6 +203,19 @@ class CaseRegistry:
                 if not valid_case_id("case/" + example) or any(char in template for char in "*?[]"):
                     raise ValueError(f"{path_variable} must be an exact relative file path inside each case; {{slide}} is allowed.")
             self.file_paths[key] = template
+        if self.layout == "cohort":
+            for key, (_, _, variable) in ASSETS.items():
+                if "{slide}" not in self.file_paths[key]:
+                    raise ValueError(f"{variable.replace('_SUBDIR', '_PATH')} must contain {{slide}} when DATA_LAYOUT=cohort.")
+            he_path = Path(self.file_paths["he"])
+            if "{slide}" in he_path.parent.as_posix():
+                raise ValueError("In cohort layout, HE_SLIDE_PATH must contain {slide} in its filename, with a fixed parent directory.")
+            # Only scan the configured H&E directory. Other cohort directories
+            # may contain raw scans, previews, backups, or unrelated results.
+            self.he_directory = he_path.parent
+            pattern = re.escape(he_path.name).replace(re.escape("{slide}"), r"(?P<slide>.+)", 1)
+            pattern = pattern.replace(re.escape("{slide}"), r"(?P=slide)")
+            self.he_filename_pattern = re.compile(pattern)
         self.cache.mkdir(parents=True, exist_ok=True)
         self.max_open = max_open
         self.cases = OrderedDict()
@@ -211,12 +227,19 @@ class CaseRegistry:
     def directory(self, case_id):
         if not valid_case_id(case_id):
             raise CaseError("Invalid case name.")
-        folder = (self.root / case_id).resolve()
+        if self.layout == "cohort" and len(case_id.split("/")) != 2:
+            raise CaseError("Cohort URLs must contain a cohort name and a slide name.")
+        relative = case_id.rsplit("/", 1)[0] if self.layout == "cohort" else case_id
+        folder = (self.root / relative).resolve()
         if folder == self.root or not folder.is_relative_to(self.root) or not folder.is_dir():
             raise CaseError(f"Case '{case_id}' was not found.")
+        if self.layout == "cohort" and not self.asset_matches(folder, "he", case_id.rsplit("/", 1)[-1]):
+            raise CaseError(f"Slide '{case_id}' was not found in the configured H&E directory.")
         return folder
 
     def list_cases(self):
+        if self.layout == "cohort":
+            return self.list_cohort_cases()
         result = []
         # Group folders have no matching assets. Once a case is found, its
         # subfolders belong to that case rather than becoming separate cases.
@@ -242,11 +265,31 @@ class CaseRegistry:
                     break
         return sorted(result, key=lambda case: case["id"].casefold())
 
-    def asset_matches(self, folder, key):
+    def list_cohort_cases(self):
+        result = []
+        for cohort in self.root.iterdir():
+            if not valid_case_id(cohort.name) or cohort.is_symlink() or not cohort.is_dir():
+                continue
+            he_directory = (cohort / self.he_directory).resolve()
+            if not he_directory.is_relative_to(cohort) or not he_directory.is_dir():
+                continue
+            for source in he_directory.iterdir():
+                match = self.he_filename_pattern.fullmatch(source.name)
+                if not match or source.name.startswith(".") or not source.is_file():
+                    continue
+                case_id = f"{cohort.name}/{match['slide']}"
+                try:
+                    self.directory(case_id)
+                except CaseError:
+                    continue
+                result.append({"id": case_id, "url": case_url(case_id)})
+        return sorted(result, key=lambda case: case["id"].casefold())
+
+    def asset_matches(self, folder, key, slide=None):
         if self.file_paths[key]:
-            source = folder / self.file_paths[key].replace("{slide}", folder.name)
+            source = folder / self.file_paths[key].replace("{slide}", slide if slide is not None else folder.name)
             if not source.resolve().is_relative_to(folder):
-                raise CaseError("Configured asset paths must remain inside their case folder.", 422)
+                raise CaseError(f"Configured asset paths must remain inside their {self.layout} folder.", 422)
             return [source] if source.is_file() else []
         source_dir = (folder / self.file_subdirs[key]).resolve()
         if not source_dir.is_relative_to(folder):
@@ -263,15 +306,16 @@ class CaseRegistry:
 
     def files(self, case_id):
         folder = self.directory(case_id)
+        slide = case_id.rsplit("/", 1)[-1] if self.layout == "cohort" else folder.name
         # Exact paths are optional overrides. Otherwise suffixes identify each
         # asset without tying its filename prefix to the case folder's name.
         files = {}
         for key, (label, suffixes, _) in ASSETS.items():
-            matches = self.asset_matches(folder, key)
+            matches = self.asset_matches(folder, key, slide)
             location = (Path(case_id) / self.file_subdirs[key]).as_posix()
             if not matches:
                 if self.file_paths[key]:
-                    expected = self.file_paths[key].replace("{slide}", folder.name)
+                    expected = self.file_paths[key].replace("{slide}", slide)
                     raise CaseError(f"Missing {label} in '{case_id}'. Expected file: {expected}.", 422)
                 raise CaseError(
                     f"Missing {label} in '{location}'. Expected one file ending in {' or '.join(suffixes)}.", 422)
@@ -439,6 +483,8 @@ class Handler(BaseHTTPRequestHandler):
         content = f'<ul>{links}</ul>' if cases else (
             '<p>No case folders found. Add a case folder under the configured data root; group subfolders are supported.</p>'
             '<pre>data/CASE_ID/\n  CASE_ID_HE.tiff\n  CASE_ID_HE.png\n  CASE_ID_IHC.tiff\n  CASE_ID_IHC.geojson</pre>')
+        if not cases and self.server.registry.layout == "cohort":
+            content = '<p>No slides found. Check the cohort folders and the configured H&amp;E file paths.</p>'
         page = ('<!doctype html><html lang="en"><meta charset="utf-8">'
                 '<meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<title>Pathology Viewer · Slides</title><style>'
@@ -486,6 +532,8 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=Path(os.environ.get("DATA_DIR", ROOT / "data")))
     parser.add_argument("--cache-dir", type=Path, default=Path(os.environ.get("CACHE_DIR", ROOT / ".cache" / "cases")))
     parser.add_argument("--max-open-cases", type=int, default=int(os.environ.get("MAX_OPEN_CASES", "4")))
+    parser.add_argument("--data-layout", choices=("case", "cohort"), default=os.environ.get("DATA_LAYOUT", "case"),
+                        help="Use physical case folders, or shared file-type directories within each cohort.")
     for _, (label, _, variable) in ASSETS.items():
         parser.add_argument("--" + variable.lower().replace("_", "-"),
                             default=os.environ.get(variable, "."),
@@ -493,14 +541,14 @@ def main():
         path_variable = variable.replace("_SUBDIR", "_PATH")
         parser.add_argument("--" + path_variable.lower().replace("_", "-"),
                             default=os.environ.get(path_variable, ""),
-                            help=f"Exact {label} path relative to each case; {{slide}} expands to its folder name. Overrides subdirectory discovery.")
+                            help=f"Exact {label} path relative to the case or cohort; {{slide}} is the URL's slide name. Overrides subdirectory discovery.")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--case", help="Prepare only this case with --prepare-only; defaults to all cases.")
     args = parser.parse_args()
     file_subdirs = {key: getattr(args, variable.lower()) for key, (_, _, variable) in ASSETS.items()}
     file_paths = {key: getattr(args, variable.replace("_SUBDIR", "_PATH").lower())
                   for key, (_, _, variable) in ASSETS.items()}
-    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases, file_subdirs, file_paths)
+    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases, file_subdirs, file_paths, args.data_layout)
     if args.prepare_only:
         failed = False
         try:
@@ -517,7 +565,7 @@ def main():
         raise SystemExit(1 if failed else 0)
     server = LocalServer((args.host, args.port), Handler, registry)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
-    print(f"Pathology Viewer: http://{args.host}:{server.server_port}\nData root: {registry.root}", flush=True)
+    print(f"Pathology Viewer: http://{args.host}:{server.server_port}\nData root: {registry.root}\nData layout: {registry.layout}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
