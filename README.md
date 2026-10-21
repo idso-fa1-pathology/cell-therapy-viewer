@@ -30,7 +30,7 @@ These open at:
 
 On a remote machine, replace `127.0.0.1` with that machine's hostname or IP address. Opening `/` lists the discovered cases with their full relative paths, or opens the case directly when there is only one. Direct links and browser refresh work; a missing trailing slash is added automatically. Existing top-level URLs such as `/test_link/` continue to work. Cases in different groups can share the same name without sharing slides or caches.
 
-Each case must contain exactly one file for each role: `*_HE.tiff` (or `.tif`), `*_IHC.tiff` (or `.tif`), `*_HE.png`, and `*_IHC.geojson`. By default these files sit directly in the case folder; optional settings below select a different subdirectory for each role. The prefixes can be anything; they do not have to match the folder name. Suffix matching is case-insensitive. Missing or multiple matches produce a visible error instead of guessing which slide or overlay to open. Unrelated files and hidden files such as macOS `._` sidecars are ignored.
+Each case must contain one file for each role. Default discovery uses `*_HE.tiff` (or `.tif`), `*_IHC.tiff` (or `.tif`), `*_HE.png`, and `*_IHC.geojson` directly in the case folder. Optional settings below select a different subdirectory or an exact file path for each role. With suffix discovery, the filename prefixes can be anything; they do not have to match the folder name. Suffix matching is case-insensitive. Missing or multiple matches produce a visible error instead of guessing which slide or overlay to open. Unrelated files and hidden files such as macOS `._` sidecars are ignored during discovery.
 
 The supplied case is in `data/2606J01_511_2_Liv_19/`. Spaces and Unicode in folder names are URL-encoded by the case list: `project A/test link` opens at `/project%20A/test%20link/`. Hidden folders and the top-level reserved names `api`, `assets`, and `favicon.svg` are excluded. Discovery does not follow directory symlinks.
 
@@ -68,6 +68,49 @@ IHC_ANNOTATIONS_SUBDIR=results/annotations
 Compose passes them to the application; no separate mount or configuration entry is needed for each case or file. The URL stays `/project_A/test_link/`. These settings apply to **every case in this viewer instance** and select the exact directory to search for each role. Keep a setting as `.` (the default) if that file belongs directly in the case folder. Use relative paths inside the case, not absolute paths or `..`. Files elsewhere are ignored, so backups do not introduce ambiguous matches. To give H&E and IHC separate locations, for example, set `HE_SLIDE_SUBDIR=slides/he` and `IHC_SLIDE_SUBDIR=slides/ihc`.
 
 After changing these settings, run `docker compose up -d --build` from the application directory.
+
+### Cohort/slide layout with registered IHC files
+
+For the layout on `rapuplabgpu04`, each case is `DATA_DIR/<cohort>/<slide>/`. Its full relative path becomes the URL. For example:
+
+```text
+/rsrch9/home/plm/idso_fa1_pathology/TIER2/ping-cell-therapy/
+└── 26-490/
+    └── 26-490-145-liver/
+        ├── HE-Stains/
+        │   └── 26-490-145-liver_HE.tiff
+        ├── HE-Recogs/
+        │   └── Segformer-mit_b5/
+        │       └── 26-490-145-liver_HE.png
+        └── IHC-Regs/
+            └── 26-490-145-liver/
+                ├── 26-490-145-liver_IHC_Reg.tiff
+                └── Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson
+```
+
+Use the updated `server.py` and `compose.yaml`, then set these values in `.env` on the deployment machine (also provided in [.env.ping.example](.env.ping.example)):
+
+```dotenv
+DATA_DIR=/rsrch9/home/plm/idso_fa1_pathology/TIER2/ping-cell-therapy
+VIEWER_PORT=9877
+
+HE_SLIDE_PATH=HE-Stains/{slide}_HE.tiff
+HE_MASK_PATH=HE-Recogs/Segformer-mit_b5/{slide}_HE.png
+IHC_SLIDE_PATH=IHC-Regs/{slide}/{slide}_IHC_Reg.tiff
+IHC_ANNOTATIONS_PATH=IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson
+```
+
+`{slide}` is expanded by the viewer to the case folder name (`26-490-145-liver` here). Keep the braces exactly as shown, without a `$`. All paths are relative to that case folder; the cohort and slide names do not need separate Compose entries. This configuration works for every cohort and slide using this layout.
+
+Each nonempty `*_PATH` selects an exact file and overrides the corresponding `*_SUBDIR` and suffix search. It supports the `{slide}` placeholder in directories and filenames. Paths must stay inside the case, with no absolute paths, `..`, or glob patterns. Filenames must match the actual filesystem, including capitalization on Linux. A missing configured file produces an error with its expanded path. Leave a `*_PATH` empty to use the existing suffix discovery for that role.
+
+Rebuild and start from the application directory on `rapuplabgpu04`:
+
+```sh
+docker compose up -d --build
+```
+
+Open **http://rapuplabgpu04:9877/26-490/26-490-145-liver/**. The root **http://rapuplabgpu04:9877/** discovers cases automatically. Docker publishes host port `9877` to the application's container port `8000`; no Dockerfile edit is needed.
 
 ## Docker Compose
 
@@ -119,6 +162,10 @@ Configuration:
 | `IHC_SLIDE_SUBDIR` | `.` | Directory within each case containing the IHC TIFF |
 | `HE_MASK_SUBDIR` | `.` | Directory within each case containing the H&E PNG |
 | `IHC_ANNOTATIONS_SUBDIR` | `.` | Directory within each case containing the IHC GeoJSON |
+| `HE_SLIDE_PATH` | Empty | Exact H&E TIFF path relative to each case; supports `{slide}` |
+| `IHC_SLIDE_PATH` | Empty | Exact IHC TIFF path relative to each case; supports `{slide}` |
+| `HE_MASK_PATH` | Empty | Exact H&E PNG path relative to each case; supports `{slide}` |
+| `IHC_ANNOTATIONS_PATH` | Empty | Exact IHC GeoJSON path relative to each case; supports `{slide}` |
 | `VIEWER_PORT` | `8000` | Host port; the container always listens on port 8000 |
 | `VIEWER_BIND_ADDRESS` | `0.0.0.0` | Host interface on which to publish the port |
 | `VIEWER_IMAGE` | `pathology-viewer:local` | Image name/tag to build and run |
@@ -170,7 +217,7 @@ npm run prepare:data -- --case "project A/test link"
 
 For frontend development, keep `npm start` running in one terminal, run `npm run dev` in another, and open the Vite URL. Vite proxies `/` and `/api` to port 8000 and serves the frontend at each case path. A production build needs only `npm start`.
 
-The Python server accepts `--data-dir`, `--cache-dir`, `--host`, `--port`, and `--max-open-cases`, or their environment equivalents `DATA_DIR`, `CACHE_DIR`, `VIEWER_HOST`, `VIEWER_PORT`, and `MAX_OPEN_CASES`. The subdirectory settings also work natively through the environment or `--he-slide-subdir`, `--ihc-slide-subdir`, `--he-mask-subdir`, and `--ihc-annotations-subdir`. Unlike Docker Compose, native startup does not load `.env` automatically.
+The Python server accepts `--data-dir`, `--cache-dir`, `--host`, `--port`, and `--max-open-cases`, or their environment equivalents `DATA_DIR`, `CACHE_DIR`, `VIEWER_HOST`, `VIEWER_PORT`, and `MAX_OPEN_CASES`. The subdirectory settings also work natively through the environment or `--he-slide-subdir`, `--ihc-slide-subdir`, `--he-mask-subdir`, and `--ihc-annotations-subdir`. Exact paths can likewise be set through the environment or `--he-slide-path`, `--ihc-slide-path`, `--he-mask-path`, and `--ihc-annotations-path`. Unlike Docker Compose, native startup does not load `.env` automatically.
 
 ```sh
 .venv/bin/python server.py --data-dir /path/to/slide-data --host 0.0.0.0 --port 8001
@@ -223,9 +270,9 @@ To use an installed Google Chrome instead:
 PLAYWRIGHT_CHANNEL=chrome npm run test:browser
 ```
 
-Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, copied folders with unchanged filenames, nested cases sharing a leaf name, configured asset subdirectories, case-insensitive suffix discovery, ambiguous matches, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests. The nested-layout browser test starts a separate temporary native server to verify environment configuration, URL decoding, slide and overlay loading, and refresh together.
+Tests cover case-specific tiles/masks/annotations, cache isolation and eviction, copied folders with unchanged filenames, nested cases sharing a leaf name, configured asset subdirectories, exact file-path templates with `{slide}` expansion, case-insensitive suffix discovery, ambiguous matches, encoded names, deep links and refresh, missing files, and path confinement. Rendering tests cover streaming formats, class/color preservation, mask transparency, cache reuse and bounds, real overview/detail/edge tiles, spatial culling, a million coincident points with a sparse neighbor, affine projection, synchronized and independent navigation, re-syncing from either panel, toggles and opacity, pan/zoom/reset, resizing, high DPI, and Canvas fallback. Browser tests write screenshots and navigation metrics to `.cache/verification/`. They start the local server automatically if needed or use the running Docker service; the supplied case must be available under `data/2606J01_511_2_Liv_19/` for data integration tests. The nested-layout browser tests start separate temporary native servers to verify environment configuration, URL decoding, slide and overlay loading, and refresh together, including the cohort/slide layout with registered IHC filenames.
 
-Verification on October 20, 2026: all **34 tests passed** (3 JavaScript, 22 Python, 9 Chrome browser tests), including nested case URLs with configured asset subdirectories, copied folders with unchanged filenames, bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. The existing browser suite ran against the rebuilt Compose service; the nested-layout test used its isolated native server. Earlier Docker builds succeeded for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
+Verification on October 21, 2026: all **40 tests passed** (3 JavaScript, 27 Python, 10 Chrome browser tests), including the cohort/slide layout with exact path templates, nested case URLs with configured asset subdirectories, copied folders with unchanged filenames, bidirectional view synchronization, a synthetic million-point browser layer, and recovery from WebGL context loss. Pixel checks verify class recoloring, size changes, and style reset in both WebGL and Canvas; custom styles also survive a switch from WebGL to Canvas. The existing browser suite ran against the rebuilt Compose service; the nested-layout tests used isolated native servers. The deployment example was checked with `docker compose config`, including literal `{slide}` placeholders, the data mount, and host port `9877`. Earlier Docker builds succeeded for Linux ARM64 and AMD64; both read the supplied TIFFs and prepared all 298,344 points (AMD64 ran under emulation). The data bind mount was verified read-only.
 
 A previous exhaustive comparison verified all 298,344 source coordinates and class IDs; maximum Float32 coordinate error was 0.0009766 image pixels. Cellular-resolution inspection at approximately 115% image zoom showed points tracking individual cells.
 

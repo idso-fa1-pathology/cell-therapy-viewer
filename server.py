@@ -179,18 +179,27 @@ class ViewerData:
 
 class CaseRegistry:
     """A small LRU of open cases. Requests and preprocessing pin their handles."""
-    def __init__(self, root, cache, max_open=4, file_subdirs=None):
+    def __init__(self, root, cache, max_open=4, file_subdirs=None, file_paths=None):
         self.root, self.cache = Path(root).resolve(), Path(cache).resolve()
         if not self.root.is_dir():
             raise ValueError(f"Data root does not exist: {self.root}. Set DATA_DIR to your case-folder parent.")
         if max_open < 1:
             raise ValueError("MAX_OPEN_CASES must be at least 1.")
-        self.file_subdirs = {}
+        self.file_subdirs, self.file_paths = {}, {}
         for key, (_, _, variable) in ASSETS.items():
             value = (file_subdirs or {}).get(key) or "."
             if value != "." and (not valid_case_id("case/" + value)):
                 raise ValueError(f"{variable} must be a relative subdirectory inside each case, or '.' for the case folder.")
             self.file_subdirs[key] = value
+            template = (file_paths or {}).get(key) or ""
+            if template:
+                path_variable = variable.replace("_SUBDIR", "_PATH")
+                example = template.replace("{slide}", "slide")
+                if "{" in example or "}" in example:
+                    raise ValueError(f"{path_variable} supports only the {{slide}} placeholder.")
+                if not valid_case_id("case/" + example) or any(char in template for char in "*?[]"):
+                    raise ValueError(f"{path_variable} must be an exact relative file path inside each case; {{slide}} is allowed.")
+            self.file_paths[key] = template
         self.cache.mkdir(parents=True, exist_ok=True)
         self.max_open = max_open
         self.cases = OrderedDict()
@@ -234,6 +243,11 @@ class CaseRegistry:
         return sorted(result, key=lambda case: case["id"].casefold())
 
     def asset_matches(self, folder, key):
+        if self.file_paths[key]:
+            source = folder / self.file_paths[key].replace("{slide}", folder.name)
+            if not source.resolve().is_relative_to(folder):
+                raise CaseError("Configured asset paths must remain inside their case folder.", 422)
+            return [source] if source.is_file() else []
         source_dir = (folder / self.file_subdirs[key]).resolve()
         if not source_dir.is_relative_to(folder):
             raise CaseError("Asset subdirectories must remain inside their case folder.", 422)
@@ -249,13 +263,16 @@ class CaseRegistry:
 
     def files(self, case_id):
         folder = self.directory(case_id)
-        # The folder identifies the URL only. A copied case keeps its original
-        # filenames; suffixes identify each asset without depending on a prefix.
+        # Exact paths are optional overrides. Otherwise suffixes identify each
+        # asset without tying its filename prefix to the case folder's name.
         files = {}
         for key, (label, suffixes, _) in ASSETS.items():
             matches = self.asset_matches(folder, key)
             location = (Path(case_id) / self.file_subdirs[key]).as_posix()
             if not matches:
+                if self.file_paths[key]:
+                    expected = self.file_paths[key].replace("{slide}", folder.name)
+                    raise CaseError(f"Missing {label} in '{case_id}'. Expected file: {expected}.", 422)
                 raise CaseError(
                     f"Missing {label} in '{location}'. Expected one file ending in {' or '.join(suffixes)}.", 422)
             if len(matches) > 1:
@@ -473,11 +490,17 @@ def main():
         parser.add_argument("--" + variable.lower().replace("_", "-"),
                             default=os.environ.get(variable, "."),
                             help=f"Subdirectory within each case containing the {label}; default: case folder.")
+        path_variable = variable.replace("_SUBDIR", "_PATH")
+        parser.add_argument("--" + path_variable.lower().replace("_", "-"),
+                            default=os.environ.get(path_variable, ""),
+                            help=f"Exact {label} path relative to each case; {{slide}} expands to its folder name. Overrides subdirectory discovery.")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--case", help="Prepare only this case with --prepare-only; defaults to all cases.")
     args = parser.parse_args()
     file_subdirs = {key: getattr(args, variable.lower()) for key, (_, _, variable) in ASSETS.items()}
-    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases, file_subdirs)
+    file_paths = {key: getattr(args, variable.replace("_SUBDIR", "_PATH").lower())
+                  for key, (_, _, variable) in ASSETS.items()}
+    registry = CaseRegistry(args.data_dir, args.cache_dir, args.max_open_cases, file_subdirs, file_paths)
     if args.prepare_only:
         failed = False
         try:

@@ -29,6 +29,12 @@ services:
       IHC_SLIDE_SUBDIR: ${IHC_SLIDE_SUBDIR:-.}
       HE_MASK_SUBDIR: ${HE_MASK_SUBDIR:-.}
       IHC_ANNOTATIONS_SUBDIR: ${IHC_ANNOTATIONS_SUBDIR:-.}
+      # Optional exact paths within each case; {slide} is its folder name.
+      # A nonempty PATH overrides the corresponding SUBDIR/suffix search.
+      HE_SLIDE_PATH: ${HE_SLIDE_PATH:-}
+      IHC_SLIDE_PATH: ${IHC_SLIDE_PATH:-}
+      HE_MASK_PATH: ${HE_MASK_PATH:-}
+      IHC_ANNOTATIONS_PATH: ${IHC_ANNOTATIONS_PATH:-}
     volumes:
       - type: bind
         source: ${DATA_DIR:-./data}
