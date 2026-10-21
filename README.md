@@ -92,7 +92,7 @@ For Ping's layout on `rapuplabgpu04`, the file-type folders sit directly inside 
             └── Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson
 ```
 
-Use the updated `server.py` and `compose.yaml`, then set these values in `.env` on the deployment machine (also provided in [.env.ping.example](.env.ping.example)):
+Use the updated `server.py` and `compose.yaml`, then set these values in the single `.env` file beside `compose.yaml` on the deployment machine:
 
 ```dotenv
 DATA_DIR=/rsrch9/home/plm/idso_fa1_pathology/TIER2/ping-cell-therapy
@@ -125,13 +125,7 @@ Open **http://rapuplabgpu04:9877/26-490/26-490-145-liver/**. The root **http://r
 
 Requires Docker with Compose. The image builds the frontend and installs the Python/OpenSlide runtime; no host Node or Python installation is needed.
 
-For a new installation, copy the example from this project directory. If `.env` already exists, keep it and add any desired settings:
-
-```sh
-cp .env.example .env
-```
-
-Set the host data root in `.env`:
+Use one `.env` file in the project directory beside `compose.yaml`. Edit that file directly for the deployment machine; no example or alternate environment files are required. Set the host data root and published port there:
 
 ```dotenv
 DATA_DIR=/absolute/path/to/slide-data
@@ -161,6 +155,15 @@ docker compose restart viewer     # After replacing existing case files
 docker compose up -d --build       # After code or .env changes
 docker compose down               # Stop; keep source data and caches
 ```
+
+Environment changes require container recreation; `docker compose restart` keeps the old container environment. If an error still shows the old annotation filename after editing `.env`, run these commands from the application directory on the server. The scoped `env -u` removes a possible shell override for the annotation path:
+
+```sh
+env -u IHC_ANNOTATIONS_PATH docker compose --env-file .env up -d --force-recreate viewer
+docker compose exec viewer printenv IHC_ANNOTATIONS_PATH
+```
+
+For the cohort layout above, the printed value must be `IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson`. Reload the browser after applying it. If multiple machines run the viewer, open the hostname of the machine you updated.
 
 Configuration:
 
