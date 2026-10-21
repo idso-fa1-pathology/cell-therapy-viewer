@@ -86,10 +86,10 @@ For Ping's layout on `rapuplabgpu04`, the file-type folders sit directly inside 
     └── IHC-Regs/
         ├── 26-490-145-liver/
         │   ├── 26-490-145-liver_IHC_Reg.tiff
-        │   └── Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson
+        │   └── Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson
         └── 26-490-146-liver/
             ├── 26-490-146-liver_IHC_Reg.tiff
-            └── Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson
+            └── Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson
 ```
 
 Use the updated `server.py` and `compose.yaml`, then set these values in `.env` on the deployment machine (also provided in [.env.ping.example](.env.ping.example)):
@@ -102,7 +102,7 @@ DATA_LAYOUT=cohort
 HE_SLIDE_PATH=HE-Stains/{slide}_HE.tiff
 HE_MASK_PATH=HE-Recogs/Segformer-mit_b5/{slide}_HE.png
 IHC_SLIDE_PATH=IHC-Regs/{slide}/{slide}_IHC_Reg.tiff
-IHC_ANNOTATIONS_PATH=IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson
+IHC_ANNOTATIONS_PATH=IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson
 ```
 
 `{slide}` is expanded by the viewer to the last part of the URL (`26-490-145-liver` here). Keep the braces exactly as shown, without a `$`. In cohort mode, all four paths are relative to `DATA_DIR/<cohort>/`. The cohort and slide names do not need separate Compose entries; this configuration works for every cohort and slide using this layout.

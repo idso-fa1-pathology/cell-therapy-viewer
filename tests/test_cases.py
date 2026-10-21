@@ -20,7 +20,7 @@ COHORT_PATHS = {
     "he": "HE-Stains/{slide}_HE.tiff",
     "mask": "HE-Recogs/Segformer-mit_b5/{slide}_HE.png",
     "ihc": "IHC-Regs/{slide}/{slide}_IHC_Reg.tiff",
-    "annotations": "IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson",
+    "annotations": "IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson",
 }
 
 

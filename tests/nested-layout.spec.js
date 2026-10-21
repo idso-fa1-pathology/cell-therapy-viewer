@@ -21,13 +21,13 @@ const layouts = [
       he: 'HE-Stains/26-490-145-liver_HE.tiff',
       ihc: 'IHC-Regs/26-490-145-liver/26-490-145-liver_IHC_Reg.tiff',
       mask: 'HE-Recogs/Segformer-mit_b5/26-490-145-liver_HE.png',
-      annotations: 'IHC-Regs/26-490-145-liver/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+      annotations: 'IHC-Regs/26-490-145-liver/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson',
     },
     environment: {
       HE_SLIDE_PATH: 'HE-Stains/{slide}_HE.tiff',
       IHC_SLIDE_PATH: 'IHC-Regs/{slide}/{slide}_IHC_Reg.tiff',
       HE_MASK_PATH: 'HE-Recogs/Segformer-mit_b5/{slide}_HE.png',
-      IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+      IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson',
     },
   },
   {
@@ -37,14 +37,14 @@ const layouts = [
       he: 'HE-Stains/26-490-145-liver_HE.tiff',
       ihc: 'IHC-Regs/26-490-145-liver/26-490-145-liver_IHC_Reg.tiff',
       mask: 'HE-Recogs/Segformer-mit_b5/26-490-145-liver_HE.png',
-      annotations: 'IHC-Regs/26-490-145-liver/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+      annotations: 'IHC-Regs/26-490-145-liver/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson',
     },
     environment: {
       DATA_LAYOUT: 'cohort',
       HE_SLIDE_PATH: 'HE-Stains/{slide}_HE.tiff',
       IHC_SLIDE_PATH: 'IHC-Regs/{slide}/{slide}_IHC_Reg.tiff',
       HE_MASK_PATH: 'HE-Recogs/Segformer-mit_b5/{slide}_HE.png',
-      IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE_transformed_shapes.geojson',
+      IHC_ANNOTATIONS_PATH: 'IHC-Regs/{slide}/Reg-cell_recog-IHC_to_HE-transformed_shapes.geojson',
     },
   },
 ];
